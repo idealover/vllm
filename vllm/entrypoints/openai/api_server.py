@@ -6,6 +6,8 @@ import asyncio
 from http import HTTPStatus
 import json
 import time
+import redis
+import os
 from typing import AsyncGenerator, Dict, List, Optional
 from packaging import version
 
@@ -14,6 +16,7 @@ from fastapi import BackgroundTasks, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import Depends, FastAPI, HTTPException, Header
 import uvicorn
 
 from vllm.engine.arg_utils import AsyncEngineArgs
@@ -41,16 +44,35 @@ except ImportError:
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
-logger = init_logger(__name__)
-served_model = None
-app = fastapi.FastAPI()
-
+#Connect to the redis cache which stores the keys
+r = redis.StrictRedis(
+    host = os.environ['REDIS_HOST'], 
+    port = 6380, 
+    password = os.environ['REDIS_PASSWORD'], 
+    ssl = True, 
+    decode_responses = True
+)
 
 def create_error_response(status_code: HTTPStatus,
                           message: str) -> JSONResponse:
     return JSONResponse(ErrorResponse(message=message,
                                       type="invalid_request_error").dict(),
                         status_code=status_code.value)
+
+async def verify_api_key(authorization: Optional[str] = Header(None)):
+    if authorization: 
+        scheme, _, token = authorization.partition(' ')
+        values = r.lrange(os.environ['ID'],0,-1)
+        if scheme.lower() == 'bearer' and token in values:
+            return
+    ret = create_error_response(
+        HTTPStatus.UNAUTHORIZED,
+        f"Invalid API key.",
+    )
+
+logger = init_logger(__name__)
+served_model = None
+app = fastapi.FastAPI()
 
 
 @app.exception_handler(RequestValidationError)
@@ -165,6 +187,17 @@ def create_logprobs(token_ids: List[int],
             for i, p in id_logprob.items()
         })
     return logprobs
+
+@app.post("/sync_api_keys")
+async def sync_api_keys(raw_request: Request):
+    body = await raw_request.json() 
+    keys: List[str] = body.get("keys", []) 
+    # You can now work with the 'keys' list
+    api_keys = api_keys[:0]
+
+    #Add the new keys
+    api_keys.extend(keys)
+    return JSONResponse({"message": "success"})
 
 
 @app.post("/v1/chat/completions")
