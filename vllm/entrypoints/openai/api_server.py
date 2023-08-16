@@ -72,7 +72,7 @@ async def verify_api_key(authorization: Optional[str] = Header(None)):
 
 logger = init_logger(__name__)
 served_model = None
-app = fastapi.FastAPI()
+app = fastapi.FastAPI(dependencies=[Depends(verify_api_key)])
 
 
 @app.exception_handler(RequestValidationError)
