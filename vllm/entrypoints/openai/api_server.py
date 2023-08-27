@@ -52,6 +52,7 @@ r = redis.StrictRedis(
     ssl = True, 
     decode_responses = True
 )
+default_email = os.environ['EMAIL']
 
 def create_error_response(status_code: HTTPStatus,
                           message: str) -> JSONResponse:
@@ -62,8 +63,8 @@ def create_error_response(status_code: HTTPStatus,
 async def verify_api_key(authorization: Optional[str] = Header(None)):
     if authorization: 
         scheme, _, token = authorization.partition(' ')
-        values = r.lrange(os.environ['ID'],0,-1)
-        if scheme.lower() == 'bearer' and token in values:
+        email = r.get(token)
+        if scheme.lower() == 'bearer' and email == default_email:
             return
     ret = create_error_response(
         HTTPStatus.UNAUTHORIZED,
