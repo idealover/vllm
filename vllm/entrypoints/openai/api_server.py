@@ -66,9 +66,9 @@ async def verify_api_key(authorization: Optional[str] = Header(None)):
         email = r.get(token)
         if scheme.lower() == 'bearer' and email == default_email:
             return
-    ret = create_error_response(
-        HTTPStatus.UNAUTHORIZED,
-        f"Invalid API key.",
+    raise HTTPException(
+        status_code=HTTPStatus.UNAUTHORIZED,
+        detail="Invalid API key or unauthorized email.",
     )
 
 logger = init_logger(__name__)
@@ -79,6 +79,13 @@ app = fastapi.FastAPI(dependencies=[Depends(verify_api_key)])
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):  # pylint: disable=unused-argument
     return create_error_response(HTTPStatus.BAD_REQUEST, str(exc))
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request, exc):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
 
 
 async def check_model(request) -> Optional[JSONResponse]:
@@ -102,20 +109,7 @@ async def get_gen_prompt(request) -> str:
             f"fastchat version is low. Current version: {fastchat.__version__} "
             "Please upgrade fastchat to use: `$ pip install -U fschat`")
 
-    conv = get_conversation_template(request.model)
-    conv = Conversation(
-        name=conv.name,
-        system_template=conv.system_template,
-        system_message=conv.system_message,
-        roles=conv.roles,
-        messages=list(conv.messages),  # prevent in-place modification
-        offset=conv.offset,
-        sep_style=SeparatorStyle(conv.sep_style),
-        sep=conv.sep,
-        sep2=conv.sep2,
-        stop_str=conv.stop_str,
-        stop_token_ids=conv.stop_token_ids,
-    )
+    conv = get_conversation_template("vicuna")
 
     if isinstance(request.messages, str):
         prompt = request.messages
