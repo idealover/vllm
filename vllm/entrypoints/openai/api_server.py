@@ -10,6 +10,7 @@ import redis
 import os
 from typing import AsyncGenerator, Dict, List, Optional
 from packaging import version
+from celery import Celery
 
 import fastapi
 from fastapi import BackgroundTasks, Request
@@ -17,7 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi import Depends, FastAPI, HTTPException, Header
-import uvicorn
+import uvicorn, requests
 
 from vllm.engine.arg_utils import AsyncEngineArgs
 from vllm.engine.async_llm_engine import AsyncLLMEngine
@@ -44,6 +45,8 @@ except ImportError:
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
+celery = Celery('tasks', broker='pyamqp://guest@localhost//')
+
 #Connect to the redis cache which stores the keys
 r = redis.StrictRedis(
     host = os.environ['REDIS_HOST'], 
@@ -65,7 +68,7 @@ async def verify_api_key(authorization: Optional[str] = Header(None)):
         scheme, _, token = authorization.partition(' ')
         email = r.get(token)
         if scheme.lower() == 'bearer' and email == default_email:
-            return
+            return email
     raise HTTPException(
         status_code=HTTPStatus.UNAUTHORIZED,
         detail="Invalid API key or unauthorized email.",
@@ -75,6 +78,20 @@ logger = init_logger(__name__)
 served_model = None
 app = fastapi.FastAPI(dependencies=[Depends(verify_api_key)])
 
+
+@celery.task
+def record_token_usage_for_user(usage, request_id, email):
+    #Charge the user based on the token usage asynchronously, charge on the backend server
+    final_resp = {}
+    final_resp["prompt_tokens"] = usage.prompt_tokens
+    final_resp["completion_tokens"] = usage.completion_tokens
+    final_resp["request_id"] = request_id
+    final_resp["model_type"] = os.environ.get('MODEL_TYPE')
+    final_resp["email"] = email
+
+    #Send a post request to the backend server to charge the user
+    requests.post(os.environ.get('BACKEND_SERVER_URL'), data=final_resp)
+    return 
 
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request, exc):  # pylint: disable=unused-argument
@@ -183,20 +200,9 @@ def create_logprobs(token_ids: List[int],
         })
     return logprobs
 
-@app.post("/sync_api_keys")
-async def sync_api_keys(raw_request: Request):
-    body = await raw_request.json() 
-    keys: List[str] = body.get("keys", []) 
-    # You can now work with the 'keys' list
-    api_keys = api_keys[:0]
-
-    #Add the new keys
-    api_keys.extend(keys)
-    return JSONResponse({"message": "success"})
-
 
 @app.post("/v1/chat/completions")
-async def create_chat_completion(raw_request: Request):
+async def create_chat_completion(raw_request: Request, email: str = Depends(verify_api_key)):
     """Completion API similar to OpenAI's API.
 
     See  https://platform.openai.com/docs/api-reference/chat/create
@@ -271,6 +277,8 @@ async def create_chat_completion(raw_request: Request):
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
+        num_prompt_tokens = 0
+        num_generated_tokens = 0
         for i in range(request.n):
             choice_data = ChatCompletionResponseStreamChoice(
                 index=i,
@@ -287,11 +295,13 @@ async def create_chat_completion(raw_request: Request):
         previous_num_tokens = [0] * request.n
         async for res in result_generator:
             res: RequestOutput
+            num_prompt_tokens += len(res.prompt_token_ids)
             for output in res.outputs:
                 i = output.index
                 delta_text = output.text[len(previous_texts[i]):]
                 previous_texts[i] = output.text
                 previous_num_tokens[i] = len(output.token_ids)
+                num_generated_tokens += len(output.token_ids)
                 response_json = create_stream_response_json(
                     index=i,
                     text=delta_text,
@@ -305,6 +315,14 @@ async def create_chat_completion(raw_request: Request):
                     )
                     yield f"data: {response_json}\n\n"
         yield "data: [DONE]\n\n"
+
+        #Create usage and charge the user
+        usage = UsageInfo(
+            prompt_tokens=num_prompt_tokens,
+            completion_tokens=num_generated_tokens,
+            total_tokens=num_prompt_tokens + num_generated_tokens,
+        )
+        record_token_usage_for_user.delay(usage, request_id)
 
     # Streaming response
     if request.stream:
@@ -342,6 +360,10 @@ async def create_chat_completion(raw_request: Request):
         completion_tokens=num_generated_tokens,
         total_tokens=num_prompt_tokens + num_generated_tokens,
     )
+
+    #Charge the user
+    record_token_usage_for_user.delay(usage, request_id)
+
     response = ChatCompletionResponse(
         id=request_id,
         created=created_time,
@@ -366,7 +388,7 @@ async def create_chat_completion(raw_request: Request):
 
 
 @app.post("/v1/completions")
-async def create_completion(raw_request: Request):
+async def create_completion(raw_request: Request, email: str = Depends(verify_api_key)):
     """Completion API similar to OpenAI's API.
 
     See https://platform.openai.com/docs/api-reference/completions/create
@@ -474,10 +496,13 @@ async def create_completion(raw_request: Request):
         return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
+        num_prompt_tokens = 0
+        num_generated_tokens = 0
         previous_texts = [""] * request.n
         previous_num_tokens = [0] * request.n
         async for res in result_generator:
             res: RequestOutput
+            num_prompt_tokens += len(res.prompt_token_ids)
             for output in res.outputs:
                 i = output.index
                 delta_text = output.text[len(previous_texts[i]):]
@@ -490,6 +515,7 @@ async def create_completion(raw_request: Request):
                     logprobs = None
                 previous_texts[i] = output.text
                 previous_num_tokens[i] = len(output.token_ids)
+                num_generated_tokens += len(output.token_ids)
                 response_json = create_stream_response_json(
                     index=i,
                     text=delta_text,
@@ -507,6 +533,15 @@ async def create_completion(raw_request: Request):
                     )
                     yield f"data: {response_json}\n\n"
         yield "data: [DONE]\n\n"
+
+        #Create usage and charge the user
+        usage = UsageInfo(
+            prompt_tokens=num_prompt_tokens,
+            completion_tokens=num_generated_tokens,
+            total_tokens=num_prompt_tokens + num_generated_tokens,
+        )
+
+        record_token_usage_for_user.delay(usage, request_id)
 
     # Streaming response
     if stream:
@@ -549,6 +584,10 @@ async def create_completion(raw_request: Request):
         completion_tokens=num_generated_tokens,
         total_tokens=num_prompt_tokens + num_generated_tokens,
     )
+
+    #Charge the user
+    record_token_usage_for_user.delay(usage, request_id)
+
     response = CompletionResponse(
         id=request_id,
         created=created_time,
