@@ -80,11 +80,11 @@ app = fastapi.FastAPI(dependencies=[Depends(verify_api_key)])
 
 
 @celery.task
-def record_token_usage_for_user(usage, request_id, email):
+def record_token_usage_for_user(prompt_tokens, completion_tokens, request_id, email):
     #Charge the user based on the token usage asynchronously, charge on the backend server
     final_resp = {}
-    final_resp["prompt_tokens"] = usage.prompt_tokens
-    final_resp["completion_tokens"] = usage.completion_tokens
+    final_resp["prompt_tokens"] = prompt_tokens
+    final_resp["completion_tokens"] = completion_tokens
     final_resp["request_id"] = request_id
     final_resp["model_type"] = os.environ.get('MODEL_TYPE')
     final_resp["email"] = email
@@ -323,7 +323,7 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
             completion_tokens=num_generated_tokens,
             total_tokens=num_prompt_tokens + num_generated_tokens,
         )
-        record_token_usage_for_user.delay(usage, request_id, email)
+        record_token_usage_for_user.delay(usage.prompt_tokens, usage.completion_tokens, request_id, email)
 
     # Streaming response
     if request.stream:
@@ -363,7 +363,7 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
     )
 
     #Charge the user
-    record_token_usage_for_user.delay(usage, request_id, email)
+    record_token_usage_for_user.delay(usage.prompt_tokens, usage.completion_tokens, request_id, email)
 
     response = ChatCompletionResponse(
         id=request_id,
@@ -542,7 +542,7 @@ async def create_completion(raw_request: Request, email: str = Depends(verify_ap
             total_tokens=num_prompt_tokens + num_generated_tokens,
         )
 
-        record_token_usage_for_user.delay(usage, request_id, email)
+        record_token_usage_for_user.delay(usage.prompt_tokens, usage.completion_tokens, request_id, email)
 
     # Streaming response
     if stream:
@@ -587,7 +587,7 @@ async def create_completion(raw_request: Request, email: str = Depends(verify_ap
     )
 
     #Charge the user
-    record_token_usage_for_user.delay(usage, request_id, email)
+    record_token_usage_for_user.delay(usage.prompt_tokens, usage.completion_tokens, request_id, email)
 
     response = CompletionResponse(
         id=request_id,
