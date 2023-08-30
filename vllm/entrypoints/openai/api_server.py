@@ -46,9 +46,6 @@ except ImportError:
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
 celery = Celery('tasks', broker='pyamqp://guest@localhost//')
 
 #Connect to the redis cache which stores the keys
@@ -78,7 +75,8 @@ async def verify_api_key(authorization: Optional[str] = Header(None)):
         detail="Invalid API key or unauthorized email.",
     )
 
-logger = init_logger(__name__)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 served_model = None
 app = fastapi.FastAPI(dependencies=[Depends(verify_api_key)])
 
