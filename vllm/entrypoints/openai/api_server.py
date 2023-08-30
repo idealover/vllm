@@ -11,6 +11,7 @@ import os
 from typing import AsyncGenerator, Dict, List, Optional
 from packaging import version
 from celery import Celery
+import logging
 
 import fastapi
 from fastapi import BackgroundTasks, Request
@@ -44,6 +45,9 @@ except ImportError:
     _fastchat_available = False
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 celery = Celery('tasks', broker='pyamqp://guest@localhost//')
 
@@ -91,7 +95,14 @@ def record_token_usage_for_user(prompt_tokens, completion_tokens, request_id, em
     final_resp["admin_secret_key"] = os.environ.get('ADMIN_SECRET_KEY')
 
     #Send a post request to the backend server to charge the user
-    requests.post(os.environ.get('BACKEND_SERVER_URL'), data=final_resp)
+    logger.info("Sending a post request to the backend server to charge the user")
+
+    try:
+        requests.post(os.environ.get('BACKEND_SERVER_URL'), data=final_resp)
+    except Exception as e:
+        logger.error("Error in sending the post request to the backend server")
+        logger.error(e)
+
     return 
 
 @app.exception_handler(RequestValidationError)
