@@ -88,6 +88,7 @@ def record_token_usage_for_user(usage, request_id, email):
     final_resp["request_id"] = request_id
     final_resp["model_type"] = os.environ.get('MODEL_TYPE')
     final_resp["email"] = email
+    final_resp["admin_secret_key"] = os.environ.get('ADMIN_SECRET_KEY')
 
     #Send a post request to the backend server to charge the user
     requests.post(os.environ.get('BACKEND_SERVER_URL'), data=final_resp)
@@ -322,7 +323,7 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
             completion_tokens=num_generated_tokens,
             total_tokens=num_prompt_tokens + num_generated_tokens,
         )
-        record_token_usage_for_user.delay(usage, request_id)
+        record_token_usage_for_user.delay(usage, request_id, email)
 
     # Streaming response
     if request.stream:
@@ -362,7 +363,7 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
     )
 
     #Charge the user
-    record_token_usage_for_user.delay(usage, request_id)
+    record_token_usage_for_user.delay(usage, request_id, email)
 
     response = ChatCompletionResponse(
         id=request_id,
@@ -541,7 +542,7 @@ async def create_completion(raw_request: Request, email: str = Depends(verify_ap
             total_tokens=num_prompt_tokens + num_generated_tokens,
         )
 
-        record_token_usage_for_user.delay(usage, request_id)
+        record_token_usage_for_user.delay(usage, request_id, email)
 
     # Streaming response
     if stream:
@@ -586,7 +587,7 @@ async def create_completion(raw_request: Request, email: str = Depends(verify_ap
     )
 
     #Charge the user
-    record_token_usage_for_user.delay(usage, request_id)
+    record_token_usage_for_user.delay(usage, request_id, email)
 
     response = CompletionResponse(
         id=request_id,
