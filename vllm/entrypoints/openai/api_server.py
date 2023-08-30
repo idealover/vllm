@@ -92,13 +92,9 @@ def record_token_usage_for_user(prompt_tokens, completion_tokens, request_id, em
     final_resp["email"] = email
     final_resp["admin_secret_key"] = os.environ.get('ADMIN_SECRET_KEY')
 
-    #Send a post request to the backend server to charge the user
-    logger.info("Sending a post request to the backend server to charge the user")
-
     try:
         requests.post(os.environ.get('BACKEND_SERVER_URL'), data=final_resp)
     except Exception as e:
-        logger.error("Error in sending the post request to the backend server")
         logger.error(e)
 
     return 
