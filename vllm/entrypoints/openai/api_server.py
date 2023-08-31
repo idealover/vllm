@@ -91,7 +91,7 @@ def record_token_usage_for_user(prompt_tokens, completion_tokens, request_id, em
     #Charge the user based on the token usage asynchronously, charge on the backend server
 
     #Dont charge the user in case the usage is from somewhere else
-    if default_email != '*':
+    if default_email != '*' or default_email == "esha@gigaml.com":
         return 
     
     final_resp = {}
