@@ -68,6 +68,8 @@ async def verify_api_key(authorization: Optional[str] = Header(None)):
     if authorization: 
         scheme, _, token = authorization.partition(' ')
         email = r.get(token)
+        if scheme.lower() == 'bearer' and default_email == '*':
+            return email
         if scheme.lower() == 'bearer' and email == default_email:
             return email
     raise HTTPException(
@@ -84,6 +86,11 @@ app = fastapi.FastAPI(dependencies=[Depends(verify_api_key)])
 @celery.task
 def record_token_usage_for_user(prompt_tokens, completion_tokens, request_id, email):
     #Charge the user based on the token usage asynchronously, charge on the backend server
+
+    #Dont charge the user in case the usage is from somewhere else
+    if default_email != '*':
+        return 
+    
     final_resp = {}
     final_resp["prompt_tokens"] = prompt_tokens
     final_resp["completion_tokens"] = completion_tokens
