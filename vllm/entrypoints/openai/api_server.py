@@ -46,7 +46,7 @@ except ImportError:
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
-celery = Celery('tasks', broker='pyamqp://guest@localhost//')
+celery = Celery('vllm.entrypoints.openai.api_server', broker='pyamqp://guest@localhost//')
 
 #Connect to the redis cache which stores the keys
 r = redis.StrictRedis(
