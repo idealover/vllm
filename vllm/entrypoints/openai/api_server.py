@@ -68,8 +68,11 @@ async def verify_api_key(authorization: Optional[str] = Header(None)):
     if authorization: 
         scheme, _, token = authorization.partition(' ')
         email = r.get(token)
-        if scheme.lower() == 'bearer' and default_email == '*':
+        if scheme.lower() == 'bearer' and default_email == '*' and email is not None:
             return email
+        
+        #Check if the user has payment method setup
+
         if scheme.lower() == 'bearer' and email == default_email:
             return email
     raise HTTPException(
@@ -100,7 +103,8 @@ def record_token_usage_for_user(prompt_tokens, completion_tokens, request_id, em
     final_resp["admin_secret_key"] = os.environ.get('ADMIN_SECRET_KEY')
 
     try:
-        requests.post(os.environ.get('BACKEND_SERVER_URL'), data=final_resp)
+        resp = requests.post(os.environ.get('BACKEND_SERVER_URL'), json=final_resp)
+        logger.info(resp.text)
     except Exception as e:
         logger.error(e)
 
