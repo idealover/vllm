@@ -529,7 +529,7 @@ async def create_completion(raw_request: Request, email: str = Depends(verify_ap
         previous_num_tokens = [0] * request.n
         async for res in result_generator:
             res: RequestOutput
-            num_prompt_tokens += len(res.prompt_token_ids)
+            num_prompt_tokens = len(res.prompt_token_ids)
             for output in res.outputs:
                 i = output.index
                 delta_text = output.text[len(previous_texts[i]):]
@@ -542,7 +542,7 @@ async def create_completion(raw_request: Request, email: str = Depends(verify_ap
                     logprobs = None
                 previous_texts[i] = output.text
                 previous_num_tokens[i] = len(output.token_ids)
-                num_generated_tokens += len(output.token_ids)
+                num_generated_tokens = len(output.token_ids)
                 response_json = create_stream_response_json(
                     index=i,
                     text=delta_text,
