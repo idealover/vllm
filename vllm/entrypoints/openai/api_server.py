@@ -112,6 +112,7 @@ def record_token_usage_for_user(prompt_tokens, completion_tokens, request_id, em
     final_resp["admin_secret_key"] = os.environ.get('ADMIN_SECRET_KEY')
 
     try:
+        print("Sending request to backend server ", final_resp)
         resp = requests.post(os.environ.get('BACKEND_SERVER_URL'), json=final_resp)
         logger.info(resp.text)
     except Exception as e:
@@ -321,6 +322,7 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
         previous_num_tokens = [0] * request.n
         async for res in result_generator:
             res: RequestOutput
+            print("Prompt tokens are ", res.prompt_token_ids)
             num_prompt_tokens += len(res.prompt_token_ids)
             for output in res.outputs:
                 i = output.index
@@ -328,6 +330,7 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
                 previous_texts[i] = output.text
                 previous_num_tokens[i] = len(output.token_ids)
                 num_generated_tokens += len(output.token_ids)
+                print("Generated tokens are ", output.token_ids)
                 response_json = create_stream_response_json(
                     index=i,
                     text=delta_text,
