@@ -68,10 +68,19 @@ async def verify_api_key(authorization: Optional[str] = Header(None)):
     if authorization: 
         scheme, _, token = authorization.partition(' ')
         email = r.get(token)
+        if email is None:
+            raise HTTPException(
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail="Invalid API key or unauthorized email.",
+            )
+        
+        if r.get(email) is None or r.get(email) == False:
+            raise HTTPException(
+                status_code=HTTPStatus.UNAUTHORIZED,
+                detail="Please setup payment method at console.gigaml.com to use the API.",
+            )
         if scheme.lower() == 'bearer' and default_email == '*' and email is not None:
             return email
-        
-        #Check if the user has payment method setup
 
         if scheme.lower() == 'bearer' and email == default_email:
             return email
