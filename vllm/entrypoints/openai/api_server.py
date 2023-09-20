@@ -29,20 +29,15 @@ from vllm.entrypoints.openai.protocol import (
     ChatCompletionRequest, ChatCompletionResponse,
     ChatCompletionResponseChoice, ChatCompletionResponseStreamChoice,
     ChatCompletionStreamResponse, ChatMessage, DeltaMessage, ErrorResponse,
-    LogProbs, ModelCard, ModelList, ModelPermission, UsageInfo)
+    LogProbs, ModelCard, ModelList, ModelPermission, UsageInfo,
+    ChatCompletionFunctionResponseStreamChoice, ChatCompletionFunctionStreamResponse, DeltaFunctionMessage,
+    FUNCTION_CALL_TOKEN)
 from vllm.logger import init_logger
 from vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
 from vllm.transformers_utils.tokenizer import get_tokenizer
 from vllm.utils import random_uuid
-
-try:
-    import fastchat
-    from fastchat.conversation import Conversation, SeparatorStyle
-    from fastchat.model.model_adapter import get_conversation_template
-    _fastchat_available = True
-except ImportError:
-    _fastchat_available = False
+from vllm.entrypoints.openai.conversation import get_conv_template, SeparatorStyle, Conversation
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
@@ -143,21 +138,29 @@ async def check_model(request) -> Optional[JSONResponse]:
 
 
 async def get_gen_prompt(request) -> str:
-    if not _fastchat_available:
-        raise ModuleNotFoundError(
-            "fastchat is not installed. Please install fastchat to use "
-            "the chat completion and conversation APIs: `$ pip install fschat`"
-        )
-    if version.parse(fastchat.__version__) < version.parse("0.2.23"):
-        raise ImportError(
-            f"fastchat version is low. Current version: {fastchat.__version__} "
-            "Please upgrade fastchat to use: `$ pip install -U fschat`")
+    """Generate the prompt from the request."""
 
-    conv = get_conversation_template("vicuna")
+    conv = get_conv_template("vicuna_v1.1")
+    conv = Conversation(
+        name=conv.name,
+        system_template=conv.system_template,
+        system_message=conv.system_message,
+        roles=conv.roles,
+        messages=list(conv.messages),  # prevent in-place modification
+        offset=conv.offset,
+        sep_style=SeparatorStyle(conv.sep_style),
+        sep=conv.sep,
+        sep2=conv.sep2,
+        stop_str=conv.stop_str,
+        stop_token_ids=conv.stop_token_ids,
+    )
 
     if isinstance(request.messages, str):
         prompt = request.messages
     else:
+        #add functions here
+        if request.functions != []:
+            conv.functions = request.functions
         for message in request.messages:
             msg_role = message["role"]
             if msg_role == "system":
@@ -301,11 +304,30 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
         response_json = response.json(ensure_ascii=False)
 
         return response_json
+    
+    def create_stream_response_json_function_call(
+        index: int,
+        text: Optional[str] = None,
+        name: Optional[str] = None,
+        finish_reason: Optional[str] = None,
+    ) -> str:
+        choice_data = ChatCompletionFunctionResponseStreamChoice(
+            index=index,
+            delta=DeltaFunctionMessage(role="assistant", arguments=text, name=name),
+            finish_reason=finish_reason,
+        )
+        response = ChatCompletionFunctionStreamResponse(
+            id=request_id,
+            created=created_time,
+            model=model_name,
+            choices=[choice_data],
+        )
+        response_json = response.json(ensure_ascii=False)
+
+        return response_json
 
     async def completion_stream_generator() -> AsyncGenerator[str, None]:
         # First chunk with role
-        num_prompt_tokens = 0
-        num_generated_tokens = 0
         for i in range(request.n):
             choice_data = ChatCompletionResponseStreamChoice(
                 index=i,
@@ -320,33 +342,87 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
 
         previous_texts = [""] * request.n
         previous_num_tokens = [0] * request.n
+        is_func_call = [False] * request.n
+        num_prompt_tokens = 0
+        num_generated_tokens = [0] * request.n
         async for res in result_generator:
             res: RequestOutput
-            num_prompt_tokens = len(res.prompt_token_ids)
+            num_prompt_tokens = len(res.prompt_token_ids)*(request.n)
             for output in res.outputs:
+                if len(output.text) < len(FUNCTION_CALL_TOKEN):
+                    #Parse only when the output is longer than the function call token
+                    continue
                 i = output.index
-                delta_text = output.text[len(previous_texts[i]):]
-                previous_texts[i] = output.text
-                previous_num_tokens[i] = len(output.token_ids)
-                num_generated_tokens = len(output.token_ids)
-                response_json = create_stream_response_json(
-                    index=i,
-                    text=delta_text,
-                )
-                yield f"data: {response_json}\n\n"
-                if output.finish_reason is not None:
+                #Handle function call separately
+                if output.text.startswith(FUNCTION_CALL_TOKEN):
+                    #Handle function calling, check if name is out yet - otherwise wait until the whole name is out
+                    remaining_string = output.text[len(FUNCTION_CALL_TOKEN):]
+                    is_func_call[i] = True
+                    if " " not in remaining_string:
+                        #Name not completely out yet
+                        continue
+                    else: 
+                        #name is out and so parse the function call 
+                        if previous_texts[i] == "":
+                            #Name is just out send out the name token
+                            name, rest = remaining_string.split(' ', 1)
+
+                            response_json = create_stream_response_json_function_call(
+                                index=i,
+                                name=name,
+                            )
+                            
+                            if rest != "":
+                                #Not empty
+                                yield f"data: {response_json}\n\n"
+
+                                #New chunk for arguments
+                                response_json = create_stream_response_json_function_call(
+                                    index=i,
+                                    text= rest,
+                                )
+                        #Handle the rest now 
+                        else:
+                            delta_arguments = output.text[len(previous_texts[i]):]
+                            response_json = create_stream_response_json_function_call(
+                                index=i,
+                                text=delta_arguments,
+                            )
+                        
+                        previous_texts[i] = output.text
+                        previous_num_tokens[i] = len(output.token_ids)
+                        num_generated_tokens[i] = len(output.token_ids)
+                else:
+                    delta_text = output.text[len(previous_texts[i]):]
+                    previous_texts[i] = output.text
+                    previous_num_tokens[i] = len(output.token_ids)
+                    num_generated_tokens[i] = len(output.token_ids)
                     response_json = create_stream_response_json(
                         index=i,
-                        text="",
-                        finish_reason=output.finish_reason,
+                        text=delta_text,
                     )
+                yield f"data: {response_json}\n\n"
+                if output.finish_reason is not None:
+                    if is_func_call[i] and output.finish_reason == "stop":
+                        output.finish_reason = "function_call"
+                        response_json = create_stream_response_json_function_call(
+                            index = i,
+                            text = "",
+                            finish_reason = output.finish_reason,
+                        )
+                    else:
+                        response_json = create_stream_response_json(
+                            index=i,
+                            text="",
+                            finish_reason=output.finish_reason,
+                        )
                     yield f"data: {response_json}\n\n"
         yield "data: [DONE]\n\n"
 
         #Create usage and charge the user
         usage = UsageInfo(
             prompt_tokens=num_prompt_tokens,
-            completion_tokens=num_generated_tokens,
+            completion_tokens=sum(num_generated_tokens),
             total_tokens=num_prompt_tokens + num_generated_tokens,
         )
         record_token_usage_for_user.delay(usage.prompt_tokens, usage.completion_tokens, request_id, email)

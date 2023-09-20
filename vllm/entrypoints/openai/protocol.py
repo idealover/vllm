@@ -1,11 +1,13 @@
 # Adapted from
 # https://github.com/lm-sys/FastChat/blob/168ccc29d3f7edc50823016105c024fe2282732a/fastchat/protocol/openai_api_protocol.py
 import time
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from vllm.utils import random_uuid
+
+FUNCTION_CALL_TOKEN = " <functioncall> "
 
 
 class ErrorResponse(BaseModel):
@@ -54,6 +56,7 @@ class UsageInfo(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model: str
+    functions: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     messages: Union[str, List[Dict[str, str]]]
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
@@ -74,7 +77,8 @@ class ChatCompletionRequest(BaseModel):
 
 class CompletionRequest(BaseModel):
     model: str
-    prompt: Union[str, List[str]]
+    # a string, array of strings, array of tokens, or array of token arrays
+    prompt: Union[List[int], List[List[int]], str, List[str]]
     suffix: Optional[str] = None
     max_tokens: Optional[int] = 16
     temperature: Optional[float] = 1.0
@@ -133,16 +137,28 @@ class CompletionStreamResponse(BaseModel):
     model: str
     choices: List[CompletionResponseStreamChoice]
 
+class FunctionCall(BaseModel):
+    """Function call"""
+    name: str 
+    arguments: str 
 
 class ChatMessage(BaseModel):
     role: str
-    content: str
+    content: Optional[str] = None
+    function_call: Optional[FunctionCall] = None
+
+    def __init__(self, role: str, content: str):
+        if content.startswith(FUNCTION_CALL_TOKEN):
+            name, argument = content[len(FUNCTION_CALL_TOKEN):].split(" ",1)
+            super().__init__(role=role, content=None, function_call = FunctionCall(name=name, arguments=argument))
+        else:
+            super().__init__(role=role, content=content)
 
 
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
-    finish_reason: Optional[Literal["stop", "length"]] = None
+    finish_reason: Optional[Literal["stop", "length", "function_call"]] = None
 
 
 class ChatCompletionResponse(BaseModel):
@@ -153,17 +169,18 @@ class ChatCompletionResponse(BaseModel):
     choices: List[ChatCompletionResponseChoice]
     usage: UsageInfo
 
+class DeltaFunctionCall(BaseModel):
+    name: Optional[str] = None
+    arguments: Optional[str] = None
 
 class DeltaMessage(BaseModel):
     role: Optional[str] = None
     content: Optional[str] = None
 
-
 class ChatCompletionResponseStreamChoice(BaseModel):
     index: int
     delta: DeltaMessage
     finish_reason: Optional[Literal["stop", "length"]] = None
-
 
 class ChatCompletionStreamResponse(BaseModel):
     id: str = Field(default_factory=lambda: f"chatcmpl-{random_uuid()}")
@@ -171,3 +188,23 @@ class ChatCompletionStreamResponse(BaseModel):
     created: int = Field(default_factory=lambda: int(time.time()))
     model: str
     choices: List[ChatCompletionResponseStreamChoice]
+
+class DeltaFunctionMessage(BaseModel):
+    role: Optional[str] = None
+    content: Optional[str] = None
+    function_call: Optional[DeltaFunctionCall] = None
+
+    def __init__(self, role:str, name: Optional[str] = None, arguments: Optional[str] = None):
+        super().__init__(role=role, content=None, function_call=DeltaFunctionCall(name=name, arguments=arguments))
+
+class ChatCompletionFunctionResponseStreamChoice(BaseModel):
+    index: int
+    delta: DeltaFunctionMessage
+    finish_reason: Optional[Literal["stop", "function_call", "length"]] = None
+
+class ChatCompletionFunctionStreamResponse(BaseModel):
+    id: str = Field(default_factory=lambda: f"chatcmpl-{random_uuid()}")
+    object: str = "chat.completion.chunk"
+    created: int = Field(default_factory=lambda: int(time.time()))
+    model: str
+    choices: List[ChatCompletionFunctionResponseStreamChoice]
