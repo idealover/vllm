@@ -1,11 +1,13 @@
 # Adapted from
 # https://github.com/lm-sys/FastChat/blob/168ccc29d3f7edc50823016105c024fe2282732a/fastchat/protocol/openai_api_protocol.py
 import time
-from typing import Dict, List, Literal, Optional, Union
+from typing import Dict, List, Literal, Optional, Union, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
 
 from vllm.utils import random_uuid
+
+FUNCTION_CALL_TOKEN = "<functioncall>"
 
 
 class ErrorResponse(BaseModel):
@@ -54,6 +56,7 @@ class UsageInfo(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     model: str
+    functions: Optional[List[Dict[str, Any]]] = Field(default_factory=list)
     messages: Union[str, List[Dict[str, str]]]
     temperature: Optional[float] = 0.7
     top_p: Optional[float] = 1.0
@@ -134,16 +137,30 @@ class CompletionStreamResponse(BaseModel):
     model: str
     choices: List[CompletionResponseStreamChoice]
 
+class FunctionCall(BaseModel):
+    """Function call"""
+    name: str 
+    arguments: str 
 
 class ChatMessage(BaseModel):
     role: str
     content: str
+    function_call: Optional[FunctionCall] = None
+
+    @validator('content', pre=True)
+    def parse_function_call(cls, v, values):
+        if v.startswith(FUNCTION_CALL_TOKEN):
+            function_details = v[len(FUNCTION_CALL_TOKEN):]
+            name, arguments = function_details.split(" ", 1)
+            values['function_call'] = FunctionCall(name=name, arguments=arguments)
+            return None
+        return v
 
 
 class ChatCompletionResponseChoice(BaseModel):
     index: int
     message: ChatMessage
-    finish_reason: Optional[Literal["stop", "length"]] = None
+    finish_reason: Optional[Literal["stop", "length", "function_call"]] = None
 
 
 class ChatCompletionResponse(BaseModel):

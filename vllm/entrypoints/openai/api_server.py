@@ -30,14 +30,7 @@ from vllm.outputs import RequestOutput
 from vllm.sampling_params import SamplingParams
 from vllm.transformers_utils.tokenizer import get_tokenizer
 from vllm.utils import random_uuid
-
-try:
-    import fastchat
-    from fastchat.conversation import Conversation, SeparatorStyle
-    from fastchat.model.model_adapter import get_conversation_template
-    _fastchat_available = True
-except ImportError:
-    _fastchat_available = False
+from vllm.entrypoints.openai.conversation import Conversation, get_conv_template, SeparatorStyle
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds
 
@@ -70,17 +63,9 @@ async def check_model(request) -> Optional[JSONResponse]:
 
 
 async def get_gen_prompt(request) -> str:
-    if not _fastchat_available:
-        raise ModuleNotFoundError(
-            "fastchat is not installed. Please install fastchat to use "
-            "the chat completion and conversation APIs: `$ pip install fschat`"
-        )
-    if version.parse(fastchat.__version__) < version.parse("0.2.23"):
-        raise ImportError(
-            f"fastchat version is low. Current version: {fastchat.__version__} "
-            "Please upgrade fastchat to use: `$ pip install -U fschat`")
+    """Generate the prompt from the request."""
 
-    conv = get_conversation_template(request.model)
+    conv = get_conv_template("vicuna_v1.1")
     conv = Conversation(
         name=conv.name,
         system_template=conv.system_template,
