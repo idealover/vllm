@@ -423,7 +423,7 @@ async def create_chat_completion(raw_request: Request, email: str = Depends(veri
         usage = UsageInfo(
             prompt_tokens=num_prompt_tokens,
             completion_tokens=sum(num_generated_tokens),
-            total_tokens=num_prompt_tokens + num_generated_tokens,
+            total_tokens=num_prompt_tokens + sum(num_generated_tokens),
         )
         record_token_usage_for_user.delay(usage.prompt_tokens, usage.completion_tokens, request_id, email)
 

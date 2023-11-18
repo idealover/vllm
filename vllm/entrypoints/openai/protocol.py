@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, validator
 
 from vllm.utils import random_uuid
 
-FUNCTION_CALL_TOKEN = " <functioncall> "
+FUNCTION_CALL_TOKEN = "<functioncall>"
 
 
 class ErrorResponse(BaseModel):
